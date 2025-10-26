@@ -91,6 +91,16 @@ if __name__ == "__main__":
     parser.add_argument("--nfactors", type=int, default=NFACTORS, help="Number of factors to multiply (default: %(default)s)")
     parser.add_argument("--degrees", type=int, default=DEGREES, help="Max per-factor degree bound d; each factor uses degree in [1,d] (default: %(default)s)")
     parser.add_argument("--coeff", type=int, default=COEFF, help="Coefficient magnitude bound; samples from [-COEFF, COEFF] (default: %(default)s)")
+    parser.add_argument(
+        "--alphabet",
+        type=str,
+        default=None,
+        help=(
+            "Alphabet of symbols to sample variables from. "
+            "Either a raw string of characters (e.g. 'xyz'), or a comma-separated list of names "
+            "(e.g. 'α,β,γ'). If omitted, uses ascii lowercase."
+        ),
+    )
     args = parser.parse_args()
 
     N_val = args.n
@@ -98,6 +108,24 @@ if __name__ == "__main__":
     NFACTORS_val = args.nfactors
     DEGREES_val = args.degrees
     COEFF_val = args.coeff
+    ALPHABET_arg = args.alphabet
+
+    # Normalize the alphabet argument
+    if ALPHABET_arg is None:
+        alphabet_param = string.ascii_lowercase
+    else:
+        if "," in ALPHABET_arg:
+            # Treat as comma-separated list of explicit names
+            alphabet_param = [tok.strip() for tok in ALPHABET_arg.split(',') if tok.strip()]
+        else:
+            # Allow shortcuts for common sets
+            if ALPHABET_arg.lower() in {"ascii_lowercase", "lower", "letters", "latin_lower"}:
+                alphabet_param = string.ascii_lowercase
+            elif ALPHABET_arg.lower() in {"ascii_uppercase", "upper", "latin_upper"}:
+                alphabet_param = string.ascii_uppercase
+            else:
+                # Use raw string as the character pool
+                alphabet_param = ALPHABET_arg
 
     if N_val < 1:
         raise SystemExit("N must be >= 1")
@@ -117,6 +145,7 @@ if __name__ == "__main__":
             n_factors=NFACTORS_val,
             d=DEGREES_val,
             coeff_range=(-COEFF_val, COEFF_val),
+            alphabet=alphabet_param,
         )
         # Create a shuffled expanded-form by shuffling the addends of P
         addends = list(sp.Add.make_args(P))
@@ -168,7 +197,7 @@ if __name__ == "__main__":
         lines.append(f"{idx}) {entry['shuffled']}")
 
     lines += (
-        "\nDO NOT USE ANY TOOL! Use Python expressions for factored forms and answer in JSON like:",
+        "\nDO NOT USE ANY TOOL! Use Python expressions for factored forms, use the same symbols from the expanded form, and answer in JSON like:",
         "```",
         '["<<<factored form>>>", ...]',
         "```\n"
