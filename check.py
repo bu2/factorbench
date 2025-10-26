@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 import sympy as sp
+import re
 from sympy.parsing.sympy_parser import (
     parse_expr,
     standard_transformations,
@@ -54,8 +55,27 @@ def _answers_list(obj):
 
 
 def _parse_expr_safe(expr_str: str, local_map: dict):
+    # First try a direct parse using the provided locals
     try:
         return parse_expr(expr_str, local_dict=local_map, transformations=TRANSFORMS, evaluate=True)
+    except Exception:
+        pass
+
+    # Fallback: substitute any non-identifier variable names (e.g., emojis)
+    # with temporary valid identifiers, then parse and remap to the original symbols.
+    try:
+        names = list(local_map.keys())
+        if not names:
+            return None
+        # Map each original name to a safe temporary identifier
+        safe_map = {name: f"v{i}" for i, name in enumerate(names)}
+        # Build a regex that matches any of the variable names, longest-first to avoid partial matches
+        # Match names only when not adjacent to identifier characters
+        alternation = "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
+        pattern = re.compile(rf"(?<!\w)(?:{alternation})(?!\w)")
+        replaced = pattern.sub(lambda m: safe_map[m.group(0)], expr_str)
+        safe_locals = {safe_map[name]: local_map[name] for name in names}
+        return parse_expr(replaced, local_dict=safe_locals, transformations=TRANSFORMS, evaluate=True)
     except Exception:
         return None
 
