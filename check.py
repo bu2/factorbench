@@ -111,28 +111,21 @@ def _factor_signature(expr: sp.Expr, symbols: list[sp.Symbol]):
     return (sp.together(total_coeff), tuple(pairs))
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Check JSON answers against polynomials.json factored forms.")
-    parser.add_argument("--polys", default="polynomials.json", help="Path to the ground-truth polynomials JSON (default: polynomials.json)")
-    args = parser.parse_args()
+def evaluate_answers(answers_obj, polys):
+    """Evaluate answers against ground-truth polynomials.
 
-    poly_path = Path(args.polys)
-    if not poly_path.exists():
-        raise SystemExit(f"Ground-truth file not found: {poly_path}")
+    Parameters
+    - answers_obj: list of answers or a dict containing a list (via _answers_list)
+                   Each answer can be a string (factored expression) or an object
+                   with a 'factored' field.
+    - polys: list loaded from polynomials.json
 
-    polys = json.loads(poly_path.read_text(encoding="utf-8"))
-    if not isinstance(polys, list):
-        raise SystemExit("polynomials.json must contain a JSON array")
-
-    raw = _read_stdin_text()
-    payload = _extract_json_payload(raw)
-    answers = _answers_list(payload)
+    Returns a dict with keys: 'summary' and 'results'.
+    """
+    answers = _answers_list(answers_obj)
 
     n_expected = len(polys)
     n_given = len(answers)
-    if n_given != n_expected:
-        print(f"Warning: expected {n_expected} answers, received {n_given}", file=sys.stderr)
-
     n = min(n_expected, n_given)
 
     results = []
@@ -241,10 +234,38 @@ def main():
         "wrong": wrong_cnt,
     }
 
-    print(json.dumps({"summary": summary, "results": results}, ensure_ascii=False, indent=2))
+    return {"summary": summary, "results": results}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Check JSON answers against polynomials.json factored forms.")
+    parser.add_argument("--polys", default="polynomials.json", help="Path to the ground-truth polynomials JSON (default: polynomials.json)")
+    args = parser.parse_args()
+
+    poly_path = Path(args.polys)
+    if not poly_path.exists():
+        raise SystemExit(f"Ground-truth file not found: {poly_path}")
+
+    polys = json.loads(poly_path.read_text(encoding="utf-8"))
+    if not isinstance(polys, list):
+        raise SystemExit("polynomials.json must contain a JSON array")
+
+    raw = _read_stdin_text()
+    payload = _extract_json_payload(raw)
+    # Produce report
+    report = evaluate_answers(payload, polys)
+
+    # Emit warning to stderr if counts mismatch (preserve script behavior)
+    if report["summary"]["total_expected"] != report["summary"]["total_received"]:
+        print(
+            f"Warning: expected {report['summary']['total_expected']} answers, received {report['summary']['total_received']}",
+            file=sys.stderr,
+        )
+
+    print(json.dumps(report, ensure_ascii=False, indent=2))
 
     # Exit non-zero if there are any wrong items
-    sys.exit(0 if wrong_cnt == 0 else 1)
+    sys.exit(0 if report["summary"]["wrong"] == 0 else 1)
 
 
 if __name__ == "__main__":
