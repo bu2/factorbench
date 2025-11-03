@@ -197,7 +197,7 @@ if __name__ == "__main__":
         lines.append(f"{idx}) {entry['shuffled']}")
 
     lines += (
-        "\nDO NOT USE ANY TOOL! Use Python expressions for factored forms, use the same symbols from the expanded form, and answer in JSON like:",
+        "\nDO NOT USE ANY TOOL! Use Python expressions for factored forms, use the same symbols from the expanded form, and answer with valid JSON only like:",
         "```",
         '["<<<factored form>>>", ...]',
         "```\n"

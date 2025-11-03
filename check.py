@@ -40,7 +40,7 @@ def _extract_json_payload(text: str):
         return json.loads(inner)
 
     # Last resort: raise
-    raise SystemExit("Failed to parse JSON from stdin. Provide a JSON array of answers or wrap it in ```json fences.")
+    raise json.JSONDecodeError("Failed to parse JSON from stdin. Provide a JSON array of answers or wrap it in ```json fences.")
 
 
 def _answers_list(obj):
