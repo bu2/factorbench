@@ -48,7 +48,7 @@ def _count_tokens(encoding, text: str) -> int:
         return 0
 
 
-def run_model(model: str, prompt: str, temperature: float | None, seed: int | None, num_ctx: int | None, stream: bool = True, encoding_name: str = "cl100k_base") -> dict:
+def run_model(model: str, prompt: str, temperature: float | None, seed: int | None, num_ctx: int | None, stream: bool = True, encoding_name: str = "cl100k_base", high: bool = False, low: bool = False) -> dict:
     """Send prompt to a local Ollama model and return a result dict.
 
     Streams tokens to stdout when stream=True and collects the full response.
@@ -73,13 +73,17 @@ def run_model(model: str, prompt: str, temperature: float | None, seed: int | No
 
         messages = [{"role": "user", "content": prompt}]
 
+        # Optional think mode for gpt-oss models
+        think_mode = "high" if high else ("low" if low else None)
+        think_kwargs = {"think": think_mode} if (think_mode and str(model).startswith("gpt-oss")) else {}
+
         if stream:
             parts: list[str] = []  # accumulate only final answer content
             all_parts: list[str] = []  # accumulate reasoning + final for token counting
             use_color = sys.stdout.isatty()
             t_first = None
             first_real_token = True
-            for chunk in ollama.chat(model=model, messages=messages, options=options or None, stream=True):
+            for chunk in ollama.chat(model=model, messages=messages, options=options or None, stream=True, **think_kwargs):
                 msg = chunk.get("message", {}) or {}
                 # Reasoning tokens (grey)
                 reasoning = msg.get("thinking") or chunk.get("thinking") or msg.get("reasoning") or chunk.get("reasoning")
@@ -110,7 +114,7 @@ def run_model(model: str, prompt: str, temperature: float | None, seed: int | No
             gen_text = "".join(all_parts)
             gen_tokens = _count_tokens(enc, gen_text)
         else:
-            resp = ollama.chat(model=model, messages=messages, options=options or None)
+            resp = ollama.chat(model=model, messages=messages, options=options or None, **think_kwargs)
             msg = resp.get("message", {}) or {}
             content = msg.get("content", "")
             gen_text = (msg.get("reasoning", "") or "") + content
@@ -152,6 +156,8 @@ def main():
     parser.add_argument("--seed", type=int, default=None, help="Sampling seed (optional)")
     parser.add_argument("--num-ctx", type=int, dest="num_ctx", default=None, help="Model context window size in tokens (optional)")
     parser.add_argument("--encoding", type=str, default="cl100k_base", help="tiktoken encoding for token counts (default: cl100k_base)")
+    parser.add_argument("--high", action="store_true", help="If set, pass think='high' to gpt-oss models")
+    parser.add_argument("--low", action="store_true", help="If set, pass think='low' to gpt-oss models")
     parser.add_argument("-n", type=int, dest="ntries", default=1, help="Number of attempts per model (default: 1)")
     args = parser.parse_args()
 
@@ -177,7 +183,7 @@ def main():
     for model in models:
         max_retries = max(1, int(args.ntries))
         for attempt in range(1, max_retries + 1):
-            run = run_model(model, prompt, args.temperature, args.seed, args.num_ctx, stream=True, encoding_name=args.encoding)
+            run = run_model(model, prompt, args.temperature, args.seed, args.num_ctx, stream=True, encoding_name=args.encoding, high=bool(args.high), low=bool(args.low))
             status = "ok" if not run["error"] else "error"
 
             if status == "ok":
