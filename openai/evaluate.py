@@ -1,3 +1,4 @@
+import os
 import sys
 import json
 import argparse
@@ -8,22 +9,23 @@ from pathlib import Path
 import pandas as pd
 
 try:
-    import ollama  # type: ignore
+    import openai  # type: ignore
 except Exception as e:  # pragma: no cover
-    sys.exit("Ollama Python client is required. Install with: pip install ollama")
+    sys.exit("openai is required for token counting. Install with: pip install openai")
 
 try:
     import tiktoken  # type: ignore
 except Exception as e:  # pragma: no cover
     sys.exit("tiktoken is required for token counting. Install with: pip install tiktoken")
 
+# Ensure we can import from repo root (for check.py)
 sys.path.append('.')
 from check import evaluate_answers, _extract_json_payload  # reuse existing logic
 
 
+# Default models for OpenAI-compatible servers
 MODELS = [
-    "qwen3:4b-thinking",
-    "gpt-oss"
+    "gpt-4o-mini"
 ]
 
 NTRIES = 1
@@ -49,45 +51,53 @@ def _count_tokens(encoding, text: str) -> int:
         return 0
 
 
-def run_model(model: str, prompt: str, temperature: float | None, seed: int | None, num_ctx: int | None, stream: bool = True, encoding_name: str = "cl100k_base", high: bool = False, low: bool = False) -> dict:
-    """Send prompt to a local Ollama model and return a result dict.
+def run_model(model: str, prompt: str, temperature: float | None, seed: int | None, num_ctx: int | None, stream: bool = True, encoding_name: str = "cl100k_base") -> dict:
+    """Send prompt to an OpenAI-compatible Chat Completions API and return a result dict.
 
     Streams tokens to stdout when stream=True and collects the full response.
 
     Returns a dict with: model, response, latency_s, error.
     """
-    print(f"\n=== Running model '{model}' (temperature={temperature}, seed={seed}, num_ctx={num_ctx}) ===")
+    print(f"\n=== Running model '{model}' (temperature={temperature}, seed={seed}) ===")
     enc = _get_encoding(encoding_name)
     prompt_tokens = _count_tokens(enc, prompt)
     print(f"Prompt tokens: {prompt_tokens}")
+
+    # Configure OpenAI client (supports custom base URL)
+    base_url = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_TOKEN") or "EMPTY"
+
+    client = openai.OpenAI(base_url=base_url, api_key=api_key)
+
     t0 = time.perf_counter()
     error = None
     content = ""
+    t_first = None
+    gen_tokens = 0
+
+    messages = [{"role": "user", "content": prompt}]
+
+    # Build request kwargs (only include provided params)
+    req_kwargs: dict = {"model": model, "messages": messages}
+    if temperature is not None:
+        req_kwargs["temperature"] = float(temperature)
+    if seed is not None:
+        # Supported in newer OpenAI-compatible servers; ignored otherwise
+        req_kwargs["seed"] = int(seed)
+    if num_ctx is not None:
+        # Many OpenAI-compatible servers use max_tokens to cap output length
+        req_kwargs["max_tokens"] = int(num_ctx)
+
     try:
-        options = {}
-        if temperature is not None:
-            options["temperature"] = float(temperature)
-        if seed is not None:
-            options["seed"] = int(seed)
-        if num_ctx is not None:
-            options["num_ctx"] = int(num_ctx)
-
-        messages = [{"role": "user", "content": prompt}]
-
-        # Optional think mode for gpt-oss models
-        think_mode = "high" if high else ("low" if low else None)
-        think_kwargs = {"think": think_mode} if (think_mode and str(model).startswith("gpt-oss")) else {}
-
         if stream:
-            parts: list[str] = []  # accumulate only final answer content
+            parts: list[str] = []
             all_parts: list[str] = []  # accumulate reasoning + final for token counting
             use_color = sys.stdout.isatty()
-            t_first = None
             first_real_token = True
-            for chunk in ollama.chat(model=model, messages=messages, options=options or None, stream=True, **think_kwargs):
-                msg = chunk.get("message", {}) or {}
-                # Reasoning tokens (grey)
-                reasoning = msg.get("thinking") or chunk.get("thinking") or msg.get("reasoning") or chunk.get("reasoning")
+            for chunk in client.chat.completions.create(stream=True, **req_kwargs):
+                choice = chunk.choices[0]
+                delta = getattr(choice, "delta", None)
+                reasoning = getattr(delta, "reasoning", None) if delta is not None else None
                 if reasoning:
                     if t_first is None:
                         t_first = time.perf_counter() - t0
@@ -96,8 +106,7 @@ def run_model(model: str, prompt: str, temperature: float | None, seed: int | No
                     else:
                         print(str(reasoning), end="", flush=True)
                     all_parts.append(str(reasoning))
-                # Final answer tokens (bold)
-                token = msg.get("content", "")
+                token = getattr(delta, "content", None) if delta is not None else None
                 if token:
                     if t_first is None:
                         t_first = time.perf_counter() - t0
@@ -109,23 +118,28 @@ def run_model(model: str, prompt: str, temperature: float | None, seed: int | No
                     else:
                         print(token, end="", flush=True)
                     parts.append(token)
-                    all_parts.append(token)
-            print()  # newline after stream finishes
+                    all_parts.append(str(reasoning))
+            print()
             content = "".join(parts)
             gen_text = "".join(all_parts)
             gen_tokens = _count_tokens(enc, gen_text)
         else:
-            resp = ollama.chat(model=model, messages=messages, options=options or None, **think_kwargs)
-            msg = resp.get("message", {}) or {}
-            content = msg.get("content", "")
-            gen_text = (msg.get("reasoning", "") or "") + content
+            resp = client.chat.completions.create(stream=False, **req_kwargs)
+            try:
+                reasoning = resp.choices[0].message.reasoning or ""
+            except Exception:
+                reasoning = ""
+            try:
+                content = resp.choices[0].message.content or ""
+            except Exception:
+                content = ""
             t_first = None
-            gen_tokens = _count_tokens(enc, gen_text)
+            gen_tokens = _count_tokens(enc, reasoning + content)
     except Exception as exc:  # pragma: no cover
         error = f"{type(exc).__name__}: {exc}"
+
     latency = time.perf_counter() - t0
-    # Metrics
-    t_first_token_s = float(t_first) if 't_first' in locals() and t_first is not None else None
+    t_first_token_s = float(t_first) if t_first is not None else None
     if t_first_token_s is not None and latency > t_first_token_s:
         gen_time = max(1e-9, latency - t_first_token_s)
         tok_per_s = gen_tokens / gen_time if gen_tokens else 0.0
@@ -147,18 +161,16 @@ def run_model(model: str, prompt: str, temperature: float | None, seed: int | No
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate local Ollama models on factorization task.")
-    parser.add_argument("--models", type=str, default=','.join(MODELS), help=f"Comma-separated list of Ollama model names (default: {MODELS})")
+    parser = argparse.ArgumentParser(description="Evaluate OpenAI-compatible models on factorization task.")
+    parser.add_argument("--models", type=str, default=','.join(MODELS), help=f"Comma-separated list of model names (default: {MODELS})")
     parser.add_argument("--ntries", type=int, default=NTRIES, help=f"Max retries per model when accuracy < 1.0 (default: {NTRIES})")
     parser.add_argument("--prompt", type=str, default="prompt.txt", help="Path to prompt.txt (default: prompt.txt)")
     parser.add_argument("--polys", type=str, default="polynomials.json", help="Path to polynomials.json (default: polynomials.json)")
     parser.add_argument("--csv", type=str, default="results.csv", help="Path to write CSV results (default: results.csv)")
     parser.add_argument("--temperature", type=float, default=None, help="Sampling temperature (optional)")
     parser.add_argument("--seed", type=int, default=None, help="Sampling seed (optional)")
-    parser.add_argument("--num-ctx", type=int, dest="num_ctx", default=None, help="Model context window size in tokens (optional)")
+    parser.add_argument("--num-ctx", type=int, dest="num_ctx", default=None, help="If set, used as max_tokens for output (optional)")
     parser.add_argument("--encoding", type=str, default="cl100k_base", help="tiktoken encoding for token counts (default: cl100k_base)")
-    parser.add_argument("--high", action="store_true", help="If set, pass think='high' to gpt-oss models")
-    parser.add_argument("--low", action="store_true", help="If set, pass think='low' to gpt-oss models")
     args = parser.parse_args()
 
     prompt_path = Path(args.prompt)
@@ -183,7 +195,7 @@ def main():
     for model in models:
         max_retries = max(1, int(args.ntries))
         for attempt in range(1, max_retries + 1):
-            run = run_model(model, prompt, args.temperature, args.seed, args.num_ctx, stream=True, encoding_name=args.encoding, high=bool(args.high), low=bool(args.low))
+            run = run_model(model, prompt, args.temperature, args.seed, args.num_ctx, stream=True, encoding_name=args.encoding)
             status = "ok" if not run["error"] else "error"
 
             if status == "ok":
@@ -253,3 +265,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
