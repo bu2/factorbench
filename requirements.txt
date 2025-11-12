@@ -1,0 +1,7 @@
+# Minimal dependencies for generate.py, check.py, and evaluation scripts
+sympy
+pandas
+tiktoken
+openai>=1.0.0
+ollama
+
