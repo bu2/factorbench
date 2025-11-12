@@ -76,17 +76,18 @@ async def run_model_async(
     temperature: float | None,
     seed: int | None,
     num_ctx: int | None,
+    high: bool = False,
+    low: bool = False,
     encoding_name: str = "cl100k_base",
 ) -> dict:
     """Send a single prompt concurrently to an OpenAI-compatible Chat Completions API.
 
     Streaming is disabled for batch evaluation; collects full response.
-    Returns a dict with: model, response, latency_s, error, token counts.
+    Returns a dict with: model, response, error, token counts.
     """
     enc = _get_encoding(encoding_name)
     prompt_tokens = _count_tokens(enc, prompt)
 
-    t0 = time.perf_counter()
     error = None
     content = ""
     gen_tokens = 0
@@ -101,11 +102,19 @@ async def run_model_async(
         req_kwargs["seed"] = int(seed)
     if num_ctx is not None:
         req_kwargs["max_tokens"] = int(num_ctx)
+    if high:
+        # Opt-in higher reasoning effort when requested
+        req_kwargs["reasoning_effort"] = "high"
+    if low:
+        # Opt-in lower reasoning effort when requested (overrides high if both set)
+        req_kwargs["reasoning_effort"] = "low"
 
     try:
         resp = await client.chat.completions.create(stream=False, **req_kwargs)
         try:
-            reasoning = resp.choices[0].message.reasoning or ""
+            msg = resp.choices[0].message
+            # Prefer 'reasoning' but support vLLM's 'reasoning_content'
+            reasoning = getattr(msg, "reasoning", None) or getattr(msg, "reasoning_content", None) or ""
         except Exception:
             reasoning = ""
         try:
@@ -116,12 +125,9 @@ async def run_model_async(
     except Exception as exc:  # pragma: no cover
         error = f"{type(exc).__name__}: {exc}"
 
-    latency = time.perf_counter() - t0
-
     return {
         "model": model,
         "response": content,
-        "latency_s": latency,
         "error": error,
         "prompt_tokens": prompt_tokens,
         "generated_tokens": gen_tokens,
@@ -141,6 +147,8 @@ async def main_async():
     parser.add_argument("--seed", type=int, default=None, help="Sampling seed (optional)")
     parser.add_argument("--num-ctx", type=int, dest="num_ctx", default=None, help="If set, used as max_tokens for output (optional)")
     parser.add_argument("--encoding", type=str, default="cl100k_base", help="tiktoken encoding for token counts (default: cl100k_base)")
+    parser.add_argument("--high", action="store_true", help="Enable high reasoning effort for models that support it")
+    parser.add_argument("--low", action="store_true", help="Enable low reasoning effort for models that support it")
     args = parser.parse_args()
 
     polys_path = Path(args.polys)
@@ -172,6 +180,7 @@ async def main_async():
         max_retries = max(1, int(args.ntries))
         for attempt in range(1, max_retries + 1):
             # Submit the batch of prompts concurrently (one API call per polynomial), no streaming
+            t0 = time.perf_counter()
             tasks = [
                 run_model_async(
                     aclient,
@@ -180,21 +189,22 @@ async def main_async():
                     args.temperature,
                     args.seed,
                     args.num_ctx,
+                    args.high,
+                    args.low,
                     encoding_name=args.encoding,
                 )
                 for prompt in per_prompts
             ]
 
             runs = await asyncio.gather(*tasks, return_exceptions=False)
+            total_latency = time.perf_counter() - t0
 
             answers: list[str] = []
-            total_latency = 0.0
             total_prompt_tokens = 0
             total_generated_tokens = 0
             per_errors: list[str] = []
 
             for idx, run in enumerate(runs):
-                total_latency += float(run.get("latency_s", 0.0) or 0.0)
                 total_prompt_tokens += int(run.get("prompt_tokens", 0) or 0)
                 total_generated_tokens += int(run.get("generated_tokens", 0) or 0)
 

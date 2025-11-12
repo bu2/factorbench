@@ -51,7 +51,17 @@ def _count_tokens(encoding, text: str) -> int:
         return 0
 
 
-def run_model(model: str, prompt: str, temperature: float | None, seed: int | None, num_ctx: int | None, stream: bool = True, encoding_name: str = "cl100k_base") -> dict:
+def run_model(
+    model: str,
+    prompt: str,
+    temperature: float | None,
+    seed: int | None,
+    num_ctx: int | None,
+    stream: bool = True,
+    high: bool = False,
+    low: bool = False,
+    encoding_name: str = "cl100k_base",
+) -> dict:
     """Send prompt to an OpenAI-compatible Chat Completions API and return a result dict.
 
     Streams tokens to stdout when stream=True and collects the full response.
@@ -87,6 +97,11 @@ def run_model(model: str, prompt: str, temperature: float | None, seed: int | No
     if num_ctx is not None:
         # Many OpenAI-compatible servers use max_tokens to cap output length
         req_kwargs["max_tokens"] = int(num_ctx)
+    if high:
+        req_kwargs["reasoning_effort"] = "high"
+    if low:
+        # If both are set, low overrides high by assignment order
+        req_kwargs["reasoning_effort"] = "low"
 
     try:
         if stream:
@@ -171,6 +186,8 @@ def main():
     parser.add_argument("--seed", type=int, default=None, help="Sampling seed (optional)")
     parser.add_argument("--num-ctx", type=int, dest="num_ctx", default=None, help="If set, used as max_tokens for output (optional)")
     parser.add_argument("--encoding", type=str, default="cl100k_base", help="tiktoken encoding for token counts (default: cl100k_base)")
+    parser.add_argument("--high", action="store_true", help="Enable high reasoning effort for models that support it")
+    parser.add_argument("--low", action="store_true", help="Enable low reasoning effort for models that support it")
     args = parser.parse_args()
 
     prompt_path = Path(args.prompt)
@@ -195,7 +212,17 @@ def main():
     for model in models:
         max_retries = max(1, int(args.ntries))
         for attempt in range(1, max_retries + 1):
-            run = run_model(model, prompt, args.temperature, args.seed, args.num_ctx, stream=True, encoding_name=args.encoding)
+            run = run_model(
+                model,
+                prompt,
+                args.temperature,
+                args.seed,
+                args.num_ctx,
+                stream=True,
+                high=args.high,
+                low=args.low,
+                encoding_name=args.encoding,
+            )
             status = "ok" if not run["error"] else "error"
 
             if status == "ok":
@@ -265,4 +292,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
