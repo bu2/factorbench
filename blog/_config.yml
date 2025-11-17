@@ -1,0 +1,11 @@
+title: "Factorbench Blog"
+description: "Notes and experiments around factorbench."
+
+remote_theme: "fongandrew/hydeout"
+
+paginate: 5
+
+plugins:
+  - jekyll-paginate
+  - jekyll-remote-theme
+

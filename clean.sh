@@ -1,3 +1,4 @@
 #!/bin/bash
 
-rm -Rfv __pycache__ polynomials.json prompt.txt results.csv
+rm -Rfv polynomials.json prompt.txt results.csv
+find . -type d -name '__pycache__' -print0 | xargs -0 rm -Rfv
